@@ -1,0 +1,128 @@
+substitutions:
+  hostname: 'yambms-s3'
+  friendly_name: 'YamBMS S3'
+  name: ''
+  
+  # Ustawienia YamBMS
+  yambms_id: '1'
+  yambms_name: 'YamBMS 1'
+  yambms_update_interval: '1s'
+  yambms_input_number_mode: 'slider'
+
+  # Parametry baterii (16S LiFePO4 - dostosuj do swoich ogniw)
+  yambms_battery_chemistry: '1' # 1=LFP, 2=Li-ion, 3=LTO
+  yambms_cell_count: '16'
+  yambms_bulk_v: '55.2'
+  yambms_float_v: '53.6'
+  yambms_rebulk_v: '52.8'
+  yambms_eoc_timer: '30'
+  yambms_cutoff_timer: '60'
+  yambms_max_requested_charge_current: '100'
+  yambms_max_requested_discharge_current: '100'
+  yambms_max_charge_current: '100'
+  yambms_max_discharge_current: '100'
+
+  # Tablice temperaturowe CCL / DCL z jawnym rzutowaniem typu dla kompilatora C++
+  yambms_charging_rate_table: 'std::map<float, float>{{-10.0, 0.0}, {0.0, 0.0}, {5.0, 0.2}, {10.0, 0.5}, {15.0, 1.0}, {45.0, 1.0}, {55.0, 0.5}, {60.0, 0.0}}'
+  yambms_discharging_rate_table: 'std::map<float, float>{{-20.0, 0.0}, {-10.0, 0.2}, {0.0, 0.5}, {10.0, 1.0}, {45.0, 1.0}, {55.0, 0.5}, {60.0, 0.0}}'
+
+  # Interwały odświeżania i limity BMS
+  bms_update_interval: '3s'
+  bms_combine_interval: '1s'
+  bms_cutoff_timer: '50s'
+  bms_rx_timeout: '100ms'
+  bms_battery_capacity: '280'   # Pojemność pojedynczego pakietu w Ah
+  bms_cell_max_cycles: '6000'   # Żywotność ogniw w cyklach (dla obliczeń SOH)
+  bms_errors_bitmask_version: '1'
+
+  # DEFINICJA PINÓW I PRĘDKOŚCI W STANDARDZIE YAMBMS
+  # uart_esp_1 -> JK BMS (przez konwerter TTL-RS485)
+  tx_pin_1: '17'
+  rx_pin_1: '18'
+  baud_rate_1: '115200'
+
+  # uart_esp_2 -> JBD BMS (UART lub przez konwerter TTL-RS485)
+  tx_pin_2: '4'
+  rx_pin_2: '5'
+  baud_rate_2: '9600'
+
+  # uart_esp_3 -> Zapasowy UART
+  tx_pin_3: '6'
+  rx_pin_3: '7'
+  baud_rate_3: '9600'
+
+  # canbus_esp32_can -> Magistrala CAN do falownika
+  tx_pin_4: '15'
+  rx_pin_4: '16'
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+web_server:
+  css_url: midea
+
+ota:
+  - platform: esphome
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+sha256:
+
+packages:
+  yambms:
+    url: https://github.com/Sleeper85/esphome-yambms
+    ref: main
+    refresh: 0s
+    files:
+      # 1. Płytka sprzętowa (zawiera już definicję uart_esp_1..3 oraz device_base.yaml)
+      - path: 'packages/board/board_ESP32-S3_DevKitC-1_LED-48.yaml'
+
+      # 2. BMS 1: JK BMS po RS485 Modbus (Sniffer + BMS 1 na uart_esp_1)
+      - path: 'packages/bms/bms_combine_JK_RS485_Modbus_sniffer.yaml'
+        vars:
+          sniffer_id: 'jk_sniffer_1'
+          sniffer_protocol: 'JK02_32S'
+          sniffer_uart_id: 'uart_esp_1'
+      - path: 'packages/bms/bms_combine_JK_RS485_Modbus_JK-B_standard.yaml'
+        vars:
+          bms_id: '1'
+          bms_name: 'JK-BMS 1'
+          bms_sniffer_id: 'jk_sniffer_1'
+          bms_address: '0x01'
+
+      # 3. BMS 2: JBD BMS po UART (na uart_esp_2 z kompletem wymaganych zmiennych)
+      - path: 'packages/bms/bms_combine_JBD_UART_full.yaml'
+        vars:
+          bms_id: '2'
+          bms_name: 'JBD-BMS 2'
+          bms_uart_id: 'uart_esp_2'
+          bms_max_charge_current: '100'
+          bms_max_discharge_current: '100'
+          bms_cell_ovp: '3.65'
+          bms_cell_uvp: '2.50'
+          bms_balance_trigger_voltage: '0.015'
+          bms_errors_bitmask_version: '1'
+
+      # 4. Główna logika łącząca YamBMS
+      - path: 'packages/yambms/yambms.yaml'
+
+      # 5. Wysyłanie danych po CAN do falownika
+      - path: 'packages/yambms/yambms_canbus.yaml'
+        vars:
+          canbus_id: '1'
+          canbus_name: 'CANBUS 1'
+          canbus_node_id: 'canbus_inverter_1'
+          canbus_platform: 'esp32_can'
+          canbus_light_id: 'esp_light'
+          canbus_link_timer_enabled: 'true'
+          canbus_link_timer: '5s'
+          canbus_extended_ack: 'false'

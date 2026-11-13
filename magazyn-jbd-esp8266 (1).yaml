@@ -1,0 +1,80 @@
+# Board: NodeMCU v2 (ESP8266) (NodeMCU)
+# Definition: definitions/boards/nodemcuv2/manifest.yaml
+
+esphome:
+  name: magazyn-jbd-esp8266
+  friendly_name: Magazyn JBD ESP8266
+
+esp8266:
+  board: nodemcuv2
+
+# Wyłączenie wysyłania logów przez port szeregowy USB, 
+# aby nie kolidowały z pracą komunikacji szeregowej na pinach D1/D2
+logger:
+  baud_rate: 0 
+
+api:
+  encryption:
+    key: "lCLr5DQg2C2cjcE3TswscIdTqPkGZ9Qrx748z5ZMWms="
+
+ota:
+  - platform: esphome
+
+# Włączenie lokalnego serwera www (podgląd przez przeglądarkę)
+web_server:
+  port: 80
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  # KONFIGURACJA STAŁEGO ADRESU IP
+  # Upewnij się, że te adresy pasują do Twojej sieci domowej!
+  manual_ip:
+    static_ip: 192.168.100.151   # Stały adres IP, jaki ma mieć ta płytka
+    gateway: 192.168.100.1       # Adres IP Twojego routera
+    subnet: 255.255.255.0      # Maska podsieci
+
+  ap:
+    ssid: Magazyn JBD ESP Fallback Hotspot
+    password: "l3AoMppM3V1B"
+
+captive_portal:
+
+# Konfiguracja Software Serial na poprawnych pinach dla NodeMCU v2
+uart:
+  - id: uart_jbd
+    tx_pin: GPIO1 # Fizyczny pin opisany na płytce jako D2 -> podłącz do RX konwertera
+    rx_pin: GPIO3 # Fizyczny pin opisany na płytce jako D1 -> podłącz do TX konwertera
+    baud_rate: 9600
+
+external_components:
+  - source: github://syssi/esphome-jbd-bms@main
+
+jbd_bms:
+  - id: jbd_bms_bateria
+    uart_id: uart_jbd
+
+sensor:
+  - platform: jbd_bms
+    jbd_bms_id: jbd_bms_bateria
+    total_voltage:
+      name: "JBD Total Voltage"
+    current:
+      name: "JBD Current"
+    state_of_charge:
+      name: "JBD State of Charge"
+    capacity_remaining:
+      name: "JBD Capacity Remaining"
+    # Poprawione sensory temperatury (JBD zazwyczaj obsługuje od 2 do 3 sond NTC)
+    temperature_1:
+      name: "JBD Temperature 1"
+    temperature_2:
+      name: "JBD Temperature 2"
+
+text_sensor:
+  - platform: jbd_bms
+    jbd_bms_id: jbd_bms_bateria
+    errors:
+      name: "JBD BMS Errors"
+

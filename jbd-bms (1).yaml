@@ -1,0 +1,63 @@
+esphome:
+  name: jbd-bms-esp32s3
+  friendly_name: JBD BMS Monitor
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://syssi/esphome-jbd-bms@main
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "jbd bms Fallback Hotspot"
+    password: "E41HA4S284Dd"
+  manual_ip:
+    gateway: 192.168.100.1
+    static_ip: 192.168.100.86
+    subnet: 255.255.255.0
+
+captive_portal:
+
+api:
+logger:
+
+ota:
+  - platform: esphome
+
+web_server:
+  port: 80
+
+uart:
+  - id: uart_bms
+    tx_pin: GPIO4
+    rx_pin: GPIO5
+    baud_rate: 9600
+
+jbd_bms:
+  - id: bms0
+    uart_id: uart_bms
+    update_interval: 5s
+
+sensor:
+  - platform: jbd_bms
+    jbd_bms_id: bms0
+    # Poprawione sensory pojemności:
+    nominal_capacity:
+      name: "BMS Pojemnosc Znamionowa"
+    capacity_remaining:
+      name: "BMS Pojemnosc Pozostala Ah"
+    current:
+      name: "BMS Prad"
+
+text_sensor:
+  - platform: jbd_bms
+    jbd_bms_id: bms0
+    errors:
+      name: "BMS Bledy"
+

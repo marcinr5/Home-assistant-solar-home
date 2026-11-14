@@ -1,0 +1,499 @@
+esp32:
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+esphome:
+  name: heatpump
+  comment: Heatpump Controller
+  friendly_name: Heatpump Controller
+
+web_server:
+  port: 80
+
+ota:
+  - platform: esphome
+
+api:
+  encryption:
+    key: !secret heatpump__encryption_key
+  services:
+    - service: set_compressor_starts
+      variables:
+        count: int
+      then:
+        - globals.set:
+            id: compressor_starts_count
+            value: !lambda 'return count;'
+        - component.update: heatpump_compressor_starts
+    - service: set_compressor_stops
+      variables:
+        count: int
+      then:
+        - globals.set:
+            id: compressor_stops_count
+            value: !lambda 'return count;'
+        - component.update: heatpump_compressor_stops
+    - service: set_defrost_count
+      variables:
+        count: int
+      then:
+        - globals.set:
+            id: defrost_count
+            value: !lambda 'return count;'
+        - component.update: heatpump_defrost_counter
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    gateway: 192.168.100.1
+    static_ip: 192.168.100.65
+    subnet: 255.255.255.0
+  ap:
+    ssid: MIDEA TEST1 Fallback Hotspot
+    password: "hoClBTCy7FBD"
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    on_time:
+      - seconds: 55
+        minutes: 59
+        hours: 23
+        then:
+          - lambda: |-
+              id(cop_day_4) = id(cop_day_3);
+              id(cop_day_3) = id(cop_day_2);
+              id(cop_day_2) = id(cop_day_1);
+              id(cop_day_1) = id(hp_daily_cop).state;
+
+captive_portal:
+
+logger:
+  level: INFO
+  baud_rate: 0
+
+globals:
+  - id: unmasked_value_water_temperature_t1s
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: unmasked_curve_selection
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: compressor_starts_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: compressor_stops_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: defrost_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: cop_day_1
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: cop_day_2
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: cop_day_3
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: cop_day_4
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+
+uart:
+  id: modbus_uart
+  tx_pin: GPIO43  
+  rx_pin: GPIO44
+  baud_rate: 9600
+  stop_bits: 1
+  data_bits: 8
+  parity: NONE
+
+modbus:
+  flow_control_pin: 5
+  id: heatpump_modbus
+
+modbus_controller:
+  - id: heatpump
+    address: 0x1
+    modbus_id: heatpump_modbus
+    setup_priority: -10
+    update_interval: 10s
+
+binary_sensor:
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump Grzanie Podlogi"
+    id: heatpump_floor_heating
+    register_type: holding
+    address: 0
+    bitmask: 0x0001
+    icon: mdi:heating-coil
+
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump CWU"
+    id: heatpump_dhw
+    register_type: holding
+    address: 0
+    bitmask: 0x0004
+    icon: mdi:water-boiler
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump Pompa obiegowa"
+    id: heatpump_circulation_pump
+    register_type: holding
+    address: 129
+    bitmask: 0x0002
+    device_class: running
+    icon: mdi:pump
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump Zawor 3D (WL=CWU / WYL=Podloga)"
+    register_type: holding
+    address: 129
+    bitmask: 0x0010
+    icon: mdi:valve
+  - platform: template
+    name: "Heatpump Stan sprezarki"
+    id: heatpump_compressor_running
+    device_class: running
+    lambda: |-
+      return id(heatpump_compressor_operating_frequency).state > 0.0;
+    on_press:
+      - lambda: |-
+          id(compressor_starts_count) += 1;
+    on_release:
+      - lambda: |-
+          id(compressor_stops_count) += 1;
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump Defrost"
+    id: heatpump_defrost_active
+    register_type: holding
+    address: 0x80
+    bitmask: 0x02
+    icon: "mdi:snowflake-melt"
+    on_press:
+      - lambda: |-
+          id(defrost_count) += 1;
+text_sensor:
+  - platform: template
+    name: "Heatpump status pracy"
+    id: heatpump_operating_mode_text
+    icon: "mdi:state-machine"
+    lambda: |-
+      if (id(heatpump_defrost_active).state) {
+        return {"Odszranianie (Defrost)"};
+      }
+      int mode = (int)id(heatpump_operating_mode).state;
+      switch (mode) {
+        case 0: return {"Wylaczony / Czuwanie"};
+        case 2: return {"Chlodzenie"};
+        case 3: return {"Grzanie"};
+        case 4: return {"CWU (Woda uzytkowa)"};
+        default: return {"Tryb (" + to_string(mode) + ")"};
+      }
+    update_interval: 10s
+
+sensor:
+  - platform: uptime
+    name: "Heatpump Uptime"
+  - platform: template
+    name: "Heatpump Liczba wlaczen sprezarki"
+    id: heatpump_compressor_starts
+    icon: "mdi:engine"
+    state_class: total_increasing
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: |-
+      return id(compressor_starts_count);
+  - platform: template
+    name: "Heatpump Liczba wylaczen sprezarki"
+    id: heatpump_compressor_stops
+    icon: "mdi:engine-off"
+    state_class: total_increasing
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: |-
+      return id(compressor_stops_count);
+  - platform: template
+    name: "Heatpump Liczba cykli Defrost"
+    id: heatpump_defrost_counter
+    icon: "mdi:snowflake-alert"
+    state_class: total_increasing
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: |-
+      return id(defrost_count);
+  - platform: template
+    id: heatpump_is_defrosting
+    internal: true
+    lambda: |-
+      return id(heatpump_defrost_active).state ? 1.0 : 0.0;
+    update_interval: 10s
+  - platform: integration
+    name: "Heatpump czas Defrost"
+    id: heatpump_defrost_hours
+    sensor: heatpump_is_defrosting
+    time_unit: h
+    restore: true
+    unit_of_measurement: "h"
+    accuracy_decimals: 2
+    device_class: duration
+    state_class: total_increasing
+  - platform: template
+    name: "Heatpump Prad jednostki zewnetrznej"
+    id: heatpump_outdoor_unit_current
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    update_interval: 5s
+    lambda: |-
+      float freq = id(heatpump_compressor_operating_frequency).state;
+      float raw_a = id(heatpump_raw_current).state;
+      if (isnan(freq) || freq <= 0.0) {
+        return id(heatpump_circulation_pump).state ? 0.4 : 0.1;
+      }
+      if (!isnan(raw_a) && raw_a > 0.0) {
+        return raw_a / 6.41;
+      }
+      return (freq * 0.11) + 0.5;
+  - platform: template
+    name: "Heatpump Aktualny Pobor Mocy"
+    id: hp_power_w
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      float a = id(heatpump_outdoor_unit_current).state;
+      float freq = id(heatpump_compressor_operating_frequency).state;
+      if (isnan(a)) return 0.0;
+      if (freq <= 0.0) {
+        return id(heatpump_circulation_pump).state ? 65.0 : 15.0;
+      }
+      float power = (230.0 * a * 0.96) - 141.0;
+      return power > 150.0 ? power : 150.0;
+  - platform: template
+    name: "Heatpump Moc Grzewcza"
+    id: hp_thermal_power_w
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      float t_out = id(heatpump_water_outlet_temperature).state;
+      float t_in = id(heatpump_water_inlet_temperature).state;
+      float flow = id(heatpump_water_flow).state;
+      float freq = id(heatpump_compressor_operating_frequency).state;
+      if (freq <= 0.0 || isnan(t_out) || isnan(t_in)) return 0.0;
+      if (isnan(flow) || flow <= 0.05) flow = 1.8;
+      float delta_t = t_out - t_in;
+      if (delta_t <= 0.0) return 0.0;
+      return flow * 1.163 * delta_t * 1000.0;
+  - platform: template
+    name: "Heatpump Aktualny COP"
+    id: hp_cop
+    unit_of_measurement: "COP"
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      float p_el = id(hp_power_w).state;
+      float p_th = id(hp_thermal_power_w).state;
+      if (isnan(p_el) || p_el < 100.0 || isnan(p_th) || p_th <= 0.0) return 0.0;
+      float cop = p_th / p_el;
+      if (cop > 7.5) return 7.5;
+      return cop;
+  - platform: total_daily_energy
+    name: "Heatpump Energia Elektryczna Dzisiaj"
+    id: hp_daily_electrical_kwh
+    power_id: hp_power_w
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    state_class: total_increasing
+    device_class: energy
+    filters:
+      - multiply: 0.001
+  - platform: total_daily_energy
+    name: "Heatpump Energia Cieplna Dzisiaj"
+    id: hp_daily_thermal_kwh
+    power_id: hp_thermal_power_w
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    state_class: total_increasing
+    device_class: energy
+    filters:
+      - multiply: 0.001
+  - platform: template
+    name: "Heatpump COP Dzisiaj"
+    id: hp_daily_cop
+    icon: "mdi:chart-line"
+    unit_of_measurement: "COP"
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 30s
+    lambda: |-
+      float kwh_el = id(hp_daily_electrical_kwh).state;
+      float kwh_th = id(hp_daily_thermal_kwh).state;
+      if (isnan(kwh_el) || kwh_el < 0.05 || isnan(kwh_th) || kwh_th <= 0.0) {
+        return 0.0;
+      }
+      float daily_cop = kwh_th / kwh_el;
+      if (daily_cop > 7.5) return 7.5;
+      return daily_cop;
+  - platform: template
+    name: "Heatpump COP Wczoraj"
+    icon: "mdi:calendar-minus"
+    unit_of_measurement: "COP"
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: 'return id(cop_day_1);'
+  - platform: template
+    name: "Heatpump COP 2 dni temu"
+    icon: "mdi:calendar-minus"
+    unit_of_measurement: "COP"
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: 'return id(cop_day_2);'
+  - platform: template
+    name: "Heatpump COP 3 dni temu"
+    icon: "mdi:calendar-minus"
+    unit_of_measurement: "COP"
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: 'return id(cop_day_3);'
+  - platform: template
+    name: "Heatpump COP 4 dni temu"
+    icon: "mdi:calendar-minus"
+    unit_of_measurement: "COP"
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: 'return id(cop_day_4);'
+  - platform: template
+    name: "Heatpump Srednie COP 5 dni"
+    icon: "mdi:chart-areaspline"
+    unit_of_measurement: "COP"
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: |-
+      float vals[5] = {
+        id(hp_daily_cop).state,
+        id(cop_day_1),
+        id(cop_day_2),
+        id(cop_day_3),
+        id(cop_day_4)
+      };
+      float sum = 0.0;
+      int count = 0;
+      for (int i = 0; i < 5; i++) {
+        if (!isnan(vals[i]) && vals[i] > 0.1) {
+          sum += vals[i];
+          count++;
+        }
+      }
+      return count > 0 ? (sum / count) : 0.0;
+  - platform: template
+    id: heatpump_is_working
+    internal: true
+    lambda: |-
+      return (id(heatpump_operating_mode).state > 0) ? 1.0 : 0.0;
+    update_interval: 10s
+  - platform: integration
+    name: "Heatpump czas pracy"
+    id: heatpump_working_hours
+    sensor: heatpump_is_working
+    time_unit: h
+    restore: true
+    unit_of_measurement: "h"
+    accuracy_decimals: 2
+    device_class: duration
+    state_class: total_increasing
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump USTAWIONA temperatura wody w zbiorniku"
+    id: heatpump_dhw_tank_temperature_t5s
+    register_type: holding
+    address: 0x4
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump Czestotliwosc operacyjna kompresora"
+    id: heatpump_compressor_operating_frequency
+    register_type: holding
+    address: 0x64
+    value_type: U_WORD
+    unit_of_measurement: Hz
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump status pracy kod"
+    id: heatpump_operating_mode
+    register_type: holding
+    address: 0x65
+    value_type: U_WORD
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump predkosc wentylatora"
+    id: heatpump_fan_speed
+    register_type: holding
+    address: 0x66
+    unit_of_measurement: "r/min"
+    value_type: U_WORD
+    icon: mdi:fan
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump PMV otwarcia"
+    id: heatpump_pmv_openness
+    register_type: holding
+    address: 0x67
+    value_type: U_WORD
+    unit_of_measurement: "Pa"
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump Temperatura wody wlotowej"
+    id: heatpump_water_inlet_temperature
+    register_type: holding
+    address: 0x68
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump Temperatura wody wylotowej"
+    id: heatpump_water_outlet_temperature
+    register_type: holding
+    address: 0x69
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    id: heatpump_raw_current
+    internal: true
+    register_type: holding
+    address: 0x72
+    value_type: U_WORD
+  - platform: modbus_controller
+    modbus_controller_id: heatpump
+    name: "Heatpump Przeplyw wody"
+    id: heatpump_water_flow
+    register_type: holding
+    address: 0x8A
+    value_type: U_WORD
+    accuracy_decimals: 2
+    unit_of_measurement: "m³/h"
+    filters:
+      - multiply: 0.01
